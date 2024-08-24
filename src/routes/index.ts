@@ -11,7 +11,7 @@ import {
 } from '@/utils/turnstile';
 
 export default defineEventHandler(async (event) => {
-  // handle cors, if applicable
+  // handle CORS, if applicable
   if (isPreflightRequest(event)) return handleCors(event, {});
 
   // parse destination URL
@@ -50,9 +50,34 @@ export default defineEventHandler(async (event) => {
         body,
       },
       onResponse(outputEvent, response) {
-        const headers = getAfterResponseHeaders(response.headers, response.url);
-        setResponseHeaders(outputEvent, headers);
-        if (token) setTokenHeader(event, token);
+        let headers = getAfterResponseHeaders(response.headers, response.url);
+        if (headers['content-type'] && headers['content-type'].includes('text/html')) {
+          // Intercept the HTML and modify the links
+          response.text().then(html => {
+            const updatedHtml = html.replace(/href="([^"]*)"/g, (match, url) => {
+              let newUrl = url;
+
+              // Handle relative paths (e.g., "/home")
+              if (url.startsWith('/')) {
+                const destinationUrl = new URL(destination);
+                newUrl = destinationUrl.origin + url;
+              }
+
+              // Handle full URLs (e.g., "http://example.com/home")
+              if (newUrl.startsWith('http') || newUrl.startsWith('//')) {
+                return `href="/?destination=${encodeURIComponent(newUrl)}"`;
+              }
+
+              // Return the original if it doesn't match the above patterns
+              return match;
+            });
+            outputEvent.res.setHeader('Content-Length', Buffer.byteLength(updatedHtml));
+            outputEvent.res.end(updatedHtml);
+          });
+        } else {
+          setResponseHeaders(outputEvent, headers);
+          if (token) setTokenHeader(event, token);
+        }
       },
     });
   } catch (e) {
